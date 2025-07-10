@@ -1,10 +1,10 @@
 package myfunc
 
 import (
-	"database/sql"
 	"encoding/json"
 	"fmt"
-	"log"
+
+	"context"
 	"net/http"
 	"strconv"
 	"time"
@@ -13,12 +13,20 @@ import (
 )
 
 func GetStudents(c *gin.Context) {
+	//就是一个缓存建用于在redis中通过建查找
 	cacheKey := "students:all"
 	ctx := c.Request.Context() // 使用请求上下文
 
 	// 尝试从Redis获取缓存
+	//传递请求上下文，例如上下文被取消就可以中断redis
+	//get返回的信息包含命令执行的结果，以及可能的错误信息，redis.StringCmd类型
+	//result提取实际的字符串数据
+
 	if catched, err := rdb.Get(ctx, cacheKey).Result(); err == nil {
+
 		var students []Student
+		//反序列化json为go中的结构体
+		//redis取出的是字符串形式的json，只是一堆字符，很难处理
 		if err := json.Unmarshal([]byte(catched), &students); err == nil {
 			c.JSON(200, students)
 			return
@@ -26,7 +34,7 @@ func GetStudents(c *gin.Context) {
 	}
 
 	// 数据库查询
-	rows, err := db.Query("SELECT id,name,tel,study FROM students")
+	rows, err := db.Query("SELECT id,name,tel,study,created_at,updated_at FROM students")
 	if err != nil {
 		c.JSON(500, gin.H{"error": "查询失败"})
 		return
@@ -36,20 +44,25 @@ func GetStudents(c *gin.Context) {
 	var students []Student
 	for rows.Next() {
 		var s Student
-		if err := rows.Scan(&s.ID, &s.Name, &s.Tel, &s.Study); err != nil {
+
+		if err := rows.Scan(&s.ID, &s.Name, &s.Tel, &s.Study, &s.CreatedAt, &s.UpdatedAt); err != nil {
 			c.JSON(500, gin.H{"error": "数据解析失败"})
 			return
 		}
 		students = append(students, s)
 	}
 
-	json.Marshal(students)
+	if data, err := json.Marshal(students); err == nil {
+		rdb.Set(ctx, cacheKey, data, time.Minute*5)
+	}
 
 	c.JSON(200, students)
 }
 
 func CreateStudent(c *gin.Context) {
 	var s Student
+	ctx:=c.Request.Context()
+	//处理http请求中的数据绑定
 	if err := c.ShouldBindJSON(&s); err != nil {
 		c.JSON(400, gin.H{"error": "无效的数据格式"})
 		return
@@ -59,9 +72,9 @@ func CreateStudent(c *gin.Context) {
 	s.CreatedAt = currentTime
 	s.UpdatedAt = currentTime
 	//数据库插入操作
-	query := fmt.Sprintf("INSERT INTO students(name,tel,study,created_at,updated_at) VALUES ('%s','%s','%s','%s','%s')",
-		s.Name, s.Tel, s.Study, s.CreatedAt, s.UpdatedAt)
-	result, err := db.Exec(query)
+	//把?当作数据，不然，传入的东西可梦影响到sql语句，%s传入sql语句是直接拼接
+	query := "INSERT INTO students(name,tel,study,created_at,updated_at) VALUES (?,?,?,?,?)"
+	result, err := db.Exec(query, s.Name, s.Tel, s.Study, s.CreatedAt, s.UpdatedAt)
 
 	if err != nil {
 		c.JSON(400, gin.H{"error": "数据库操作失败"})
@@ -71,10 +84,31 @@ func CreateStudent(c *gin.Context) {
 	clearStudentsCache()
 	id, _ := result.LastInsertId()
 
+
+
+	newStudent:=Student{
+		ID:        int(id),
+		Name: s.Name,
+		Tel: s.Tel ,
+		Study: s.Study ,
+		CreatedAt: s.CreatedAt,
+		UpdatedAt: s.UpdatedAt,
+	}
+	newStudentjson,err:=json.Marshal(&newStudent);if err != nil {
+		c.JSON(400,gin.H{"error":"序列化学生失败"})
+		return
+	}
+	if err:=rdb.Set(ctx,fmt.Sprintf("student:%d",id),newStudentjson,0).Err(); err != nil {
+		c.JSON(400,gin.H{"error":"写入缓存失败"})
+		return
+	}
 	c.JSON(200, gin.H{
 		"message": "学生创建成功",
 		"id":      id})
-	fmt.Println("学生创建成功，name:%s", s.Name)
+
+
+	fmt.Println("写入缓存成功")
+
 }
 
 func UpdateStudent(c *gin.Context) {
@@ -105,9 +139,9 @@ func UpdateStudent(c *gin.Context) {
 		c.JSON(404, gin.H{"error": "学生不存在"})
 		return
 	}
-	clearStudentsCache()
 
 	c.JSON(200, gin.H{"message": "更新成功"})
+	clearStudentsCache(id) // id 为当前学生id
 
 }
 
@@ -129,6 +163,7 @@ func DeleteStudent(c *gin.Context) {
 		return
 	}
 	c.JSON(200, gin.H{"message": "删除成功"})
+	clearStudentsCache(id) // id 为当前学生id
 }
 func GetStudentById(c *gin.Context) {
 	idStr := c.Param("id")
@@ -157,35 +192,43 @@ func GetStudentById(c *gin.Context) {
 
 	// 数据库查询
 	var student Student
-	err = db.QueryRow(
-		"SELECT id, name, tel, study, created_at, updated_at FROM students WHERE id = ?",
-		id,
-	).Scan(
-		&student.ID, &student.Name, &student.Tel, &student.Study,
-		&student.CreatedAt, &student.UpdatedAt,
-	)
-
-	switch {
-	case err == sql.ErrNoRows:
-
-		rdb.Set(ctx, cacheKey, "NULL", 5*time.Minute)
-		c.JSON(404, gin.H{"error": "学生不存在"})
+	rows, err := db.Query("SELECT id,name,tel,study,created_at,updated_at WHERE id=?", id)
+	if err != nil {
+		c.JSON(500, "查询失败")
 		return
-	case err != nil:
-		log.Printf("数据库查询失败: %v", err)
-		c.JSON(500, gin.H{"error": "系统错误"})
+	}
+	defer rows.Close()
+	if rows.Next() {
+		err := rows.Scan(&student.ID, &student.Name, &student.Tel, &student.Study, &student.CreatedAt, &student.UpdatedAt)
+		if err != nil {
+			c.JSON(500, gin.H{"error": "数据解析失败"})
+			return
+		}
+		c.JSON(200, student)
+	} else {
+		c.JSON(404, gin.H{"error": "学生不存在"})
 		return
 	}
 
-	// 设置缓存（添加随机过期时间）
-	go func() {
-		json.Marshal(student)
-	}()
+	if err := rows.Err(); err != nil {
+		c.JSON(500, gin.H{"error": "遍历数据出错"})
+		return
+	}
+
+	data, _ := json.Marshal(student)
+	rdb.Set(ctx, cacheKey, data, time.Minute*5)
 
 	c.JSON(200, student)
 }
 
-func clearStudentsCache() {
+func clearStudentsCache(studentID ...int) {
 	//清除缓存
+
+	ctx := context.Background() // 使用全局的context
 	rdb.Del(ctx, "students:all")
+	if len(studentID) > 0 {
+		key := fmt.Sprintf("student:%d", studentID[0])
+		rdb.Del(ctx, key)
+	}
+
 }
