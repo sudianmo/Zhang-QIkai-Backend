@@ -20,11 +20,16 @@ func main() {
 
 	api := r.Group("/api")
 	{
-		api.POST("/students", myfunc.CreateStudent)
-		api.GET("/students", myfunc.GetStudents)
-		api.GET("/students/:id", myfunc.GetStudentById)
-		api.PUT("/students/:id", myfunc.UpdateStudent)
-		api.DELETE("/students/:id", myfunc.DeleteStudent)
+		api.POST("/login", myfunc.Login)
+		protected := api.Group("/", myfunc.JWTMiddleware())
+		{
+			protected.POST("/students", myfunc.CreateStudent)
+			protected.GET("/students", myfunc.GetStudents)
+			protected.GET("/students/:id", myfunc.GetStudentById)
+			protected.PUT("/students/:id", myfunc.UpdateStudent)
+			protected.DELETE("/students/:id", myfunc.DeleteStudent)
+		}
+
 	}
 
 	r.Run()

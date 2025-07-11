@@ -5,15 +5,15 @@ import (
 	"fmt"
 
 	"context"
+	"github.com/gin-gonic/gin"
 	"net/http"
 	"strconv"
 	"time"
-
-	"github.com/gin-gonic/gin"
 )
 
 func GetStudents(c *gin.Context) {
 	cacheKey := "students:all"
+
 	ctx := c.Request.Context() // 使用请求上下文
 
 	// 尝试从Redis获取缓存
@@ -61,32 +61,41 @@ func CreateStudent(c *gin.Context) {
 	s.CreatedAt = currentTime
 	s.UpdatedAt = currentTime
 	//数据库插入操作
-	query := fmt.Sprintf("INSERT INTO students(name,tel,study,created_at,updated_at) VALUES ('%s','%s','%s','%s','%s')",
-		s.Name, s.Tel, s.Study, s.CreatedAt, s.UpdatedAt)
-	result, err := db.Exec(query)
+	query := "INSERT INTO students(name,tel,study,created_at,updated_at) VALUES (?,?,?,?,?)"
+	result, err := db.Exec(query, s.Name, s.Tel, s.Study, s.CreatedAt, s.UpdatedAt)
 
 	if err != nil {
 		c.JSON(400, gin.H{"error": "数据库操作失败"})
 		return
 	}
-
-	clearStudentsCache()
 	id, _ := result.LastInsertId()
+
+	//写入缓存，缓存5min
+	ctx := c.Request.Context()
+	CreaKey := fmt.Sprintf("student:%d", id)
+	if data, err := json.Marshal(s); err == nil {
+		rdb.Set(ctx, CreaKey, data, time.Minute*5)
+		fmt.Println("写入缓存")
+	}
 
 	c.JSON(200, gin.H{
 		"message": "学生创建成功",
 		"id":      id})
-	fmt.Println("学生创建成功，name:%s", s.Name)
+	fmt.Println("学生创建成功，name:", s.Name)
+
 }
 
 func UpdateStudent(c *gin.Context) {
+	//先更新数据库再更新缓存中的数据
 	idStr := c.Param("id")
 	id, err := strconv.Atoi(idStr)
 	if err != nil {
 		c.JSON(400, gin.H{"error": "无效的学生id"})
 		return
 	}
+
 	var updated Student
+
 	//检查格式
 	if err := c.ShouldBindJSON(&updated); err != nil {
 		//状态码400,<==>StatusBadRequest 客户端请求语法错误
@@ -107,9 +116,17 @@ func UpdateStudent(c *gin.Context) {
 		c.JSON(404, gin.H{"error": "学生不存在"})
 		return
 	}
+	clearStudentCache(id)
+
+	ctx := c.Request.Context()
+	cacheKey := fmt.Sprintf("student:%d", id)
+	if data, err := json.Marshal(updated); err == nil {
+		rdb.Set(ctx, cacheKey, data, time.Minute*5)
+		fmt.Println("写入缓存")
+	}
+	// id 为当前学生id
 
 	c.JSON(200, gin.H{"message": "更新成功"})
-	clearStudentsCache(id) // id 为当前学生id
 
 }
 
@@ -131,7 +148,7 @@ func DeleteStudent(c *gin.Context) {
 		return
 	}
 	c.JSON(200, gin.H{"message": "删除成功"})
-	clearStudentsCache(id) // id 为当前学生id
+	clearStudentCache(id) // id 为当前学生id
 }
 func GetStudentById(c *gin.Context) {
 	idStr := c.Param("id")
@@ -160,43 +177,35 @@ func GetStudentById(c *gin.Context) {
 
 	// 数据库查询
 	var student Student
-	rows, err := db.Query("SELECT id,name,tel,study,created_at,updated_at WHERE id=?", id)
+	err = db.QueryRow("SELECT id,name,tel,study,created_at,updated_at  FROM students WHERE id=?", id).Scan(
+		&student.ID,
+		&student.Name,
+		&student.Tel,
+		&student.Study,
+		&student.CreatedAt,
+		&student.UpdatedAt)
 	if err != nil {
 		c.JSON(500, "查询失败")
 		return
 	}
-	defer rows.Close()
-	if rows.Next() {
-		err := rows.Scan(&student.ID, &student.Name, &student.Tel, &student.Study, &student.CreatedAt, &student.UpdatedAt)
-		if err != nil {
-			c.JSON(500, gin.H{"error": "数据解析失败"})
-			return
-		}
-		c.JSON(200, student)
-	} else {
-		c.JSON(404, gin.H{"error": "学生不存在"})
-		return
-	}
 
-	if err := rows.Err(); err != nil {
-		c.JSON(500, gin.H{"error": "遍历数据出错"})
-		return
+	if data, err := json.Marshal(student); err == nil {
+		rdb.Set(ctx, cacheKey, data, time.Minute*5)
+		fmt.Println("写入缓存")
 	}
-
-	data, _ := json.Marshal(student)
-	rdb.Set(ctx, cacheKey, data, time.Minute*5)
 
 	c.JSON(200, student)
 }
 
-func clearStudentsCache(studentID ...int) {
-	//清除缓存
+// 只清理单个学生缓存
+func clearStudentCache(id int) {
+	ctx := context.Background()
+	key := fmt.Sprintf("student:%d", id)
+	rdb.Del(ctx, key)
+}
 
-	ctx := context.Background() // 使用全局的context
+// 清理所有学生列表缓存
+func clearAllStudentsCache() {
+	ctx := context.Background()
 	rdb.Del(ctx, "students:all")
-	if len(studentID) > 0 {
-		key := fmt.Sprintf("student:%d", studentID[0])
-		rdb.Del(ctx, key)
-	}
-
 }
