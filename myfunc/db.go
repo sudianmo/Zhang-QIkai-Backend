@@ -42,11 +42,7 @@ func InitDB(dsn string) error {
 	}
 	fmt.Println("数据库连接成功")
 		//Ping尝试真正连接数据库
-
-
-
 	//Exec函数用于执行部返回结果的sql语句，对数据库插入，修改，删除
-
 	_, err = db.Exec(`
         CREATE TABLE IF NOT EXISTS students (
             id INT AUTO_INCREMENT PRIMARY KEY,
@@ -71,15 +67,12 @@ func InitDB(dsn string) error {
 	})
 	//options配置redis客户端
 	//newClient返回的是一个实现了redis接口的对象，rdb用于操作redis
-
 	ctx, cancel = context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
-
 	if err := rdb.Ping(ctx).Err(); err != nil {
 		return fmt.Errorf("Redis连接失败: %w", err)
 	}
 	fmt.Println("Redis连接成功")
-
 	return nil
 }
 
