@@ -18,14 +18,15 @@ type LoginRequest struct {
 
 func Login(c *gin.Context) {
 	var req LoginRequest
-	//承载登陆请求中的登陆信息
+	//承载登陆请求中的登陆信息ExpiresAt: jwt.NewNumericDate(time.Now().Add(time.Hour * 1)),
 
 	if err := c.ShouldBindJSON(&req); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "无效的请求数据"})
 		return
 	}
 	//负载部分数据，MapClaims存储Jwt的声明
-	if req.Username == "damsu" && req.Password == "sudianmo" {
+	//jwt.MapClaims: map[string]interface的一种别名，拥有灵活定义JWT载荷的数据
+	if req.Username == "damsu" && req.Password == "123456" {
 		claims := jwt.MapClaims{
 			"user_id": 1, //id声明
 			"exp":     time.Now().Add(time.Hour * 1).Unix(),
@@ -78,4 +79,4 @@ func JWTMiddleware() gin.HandlerFunc {
 	//接受一个匿名函数
 }
 
-//eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJleHAiOjE3NTIzMjI2OTIsInVzZXJfaWQiOjF9.eFAtQjS7nsVJfj4stQUlnnwCpqowY9pmXCKvzNeIoGY
+//eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJleHAiOjE3NTI5Mzg2MjgsInVzZXJfaWQiOjF9.uZxeUbeoheMQCC9I2SIzVMRiRjn9OlEzZHl0ZHJ_b7Y

@@ -8,27 +8,31 @@ import (
 )
 
 func main() {
-	r := gin.Default()
-
-	//初始化数据库
-	dsn := "root:31415926@tcp(127.0.0.1:3306)/Student_sql"
-	fmt.Println("等待连接中")
-	if err := myfunc.InitDB(dsn); err != nil {
-		log.Println("数据库连接失败", err)
-		return
+	fmt.Println("等待连接中...")
+	if err := myfunc.InitDB(); err != nil {
+		log.Fatal(err)
 	}
+	sqlDB, err := myfunc.GormDB.DB()
+	if err != nil {
+		log.Fatal(err)
+	}
+	defer sqlDB.Close()
 
+	if err := myfunc.InitRedis(); err != nil {
+		log.Fatal(err)
+	}
+	//连接池不会自动关闭，连接池设计的目的是为了合理复用
+
+	r := gin.Default()
 	api := r.Group("/api")
 	{
-		api.POST("/login", myfunc.Login)
-		protected := api.Group("/", myfunc.JWTMiddleware())
-		{
-			protected.POST("/students", myfunc.CreateStudent)
-			protected.GET("/students", myfunc.GetStudents)
-			protected.GET("/students/:id", myfunc.GetStudentById)
-			protected.PUT("/students/:id", myfunc.UpdateStudent)
-			protected.DELETE("/students/:id", myfunc.DeleteStudent)
-		}
+		api.Use(myfunc.CorsMiddleWire(), myfunc.LogMiddleWire())
+
+		api.POST("/students", myfunc.CreateStudent)
+		api.GET("/students", myfunc.GetStudents)
+		api.GET("/students/:name", myfunc.GetStudentByName)
+		api.PUT("/students/:name", myfunc.UpdateStudent)
+		api.DELETE("/students/:name", myfunc.DeleteStudent)
 
 	}
 
